@@ -1,0 +1,34 @@
+<project default="compile" name="Build FlowDroid tool">
+	  <property file="ant.settings"/>
+	    <target name="settings">
+	        <fail
+	            message="Please copy ant.settings.template to ant.settings, and set the variables in it."
+                unless="soot.jar"
+	        />
+	    </target>
+    <target name="compile" depends="settings">
+		<mkdir dir="build/classes" />
+		<javac srcdir="src" includeantruntime="true" source="1.7" target="1.7" destdir="build/classes" debug="true">
+			<classpath>
+				<pathelement location="${soot.jar}" />
+				<pathelement location="${heros.jar}" />
+				<pathelement location="${infoflow.jar}" />
+				<pathelement location="${infoflow-summaries.jar}" />
+                <pathelement location="${infoflow-android.jar}" />
+				<fileset dir="lib">
+					<include name="*.jar" />
+				</fileset>
+			</classpath>
+		</javac>
+	</target>
+    
+    <target name="jar" depends="compile">
+		<mkdir dir="build/jar" />
+		<jar destfile="${flowdroid-run-tool.jar}" basedir="build/classes">
+			<manifest>
+				<attribute name="Main-Class" value="flowdroid.runtool.RunTool" />
+				<!-- <attribute name="Main-Class" value="?"/>-->
+			</manifest>
+		</jar>
+	</target>
+</project>
