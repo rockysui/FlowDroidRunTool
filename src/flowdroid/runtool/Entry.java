@@ -1,7 +1,9 @@
-//Modified version of class soot.jimple.infoflow.android.TestApps.Test
-//From project soot-infoflow-android
-//URL: 
 package flowdroid.runtool;
+
+/**
+ * Based off the class SetupApplication from package soot.jimple.infoflow.android.TestApps.Test
+ * Repository: https://github.com/secure-software-engineering/soot-infoflow-android
+ */
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -11,11 +13,13 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +33,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import javax.xml.stream.XMLStreamException;
+
+
+
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -45,6 +52,7 @@ import soot.jimple.infoflow.android.SetupApplication;
 import soot.jimple.infoflow.android.source.AndroidSourceSinkManager.LayoutMatchingMode;
 import soot.jimple.infoflow.config.IInfoflowConfig;
 import soot.jimple.infoflow.data.Abstraction;
+import soot.jimple.infoflow.data.AccessPath;
 import soot.jimple.infoflow.data.pathBuilders.DefaultPathBuilderFactory.PathBuilder;
 import soot.jimple.infoflow.handlers.ResultsAvailableHandler;
 import soot.jimple.infoflow.ipc.IIPCManager;
@@ -59,6 +67,7 @@ import soot.jimple.infoflow.util.SystemClassHandler;
 import soot.options.Options;
 import soot.util.HashMultiMap;
 import soot.util.MultiMap;
+import libsvm.*;
 
 public class Entry {
 	
@@ -142,9 +151,10 @@ public class Entry {
 	private static String summaryPath = "";
 	private static String resultFilePath = "";
 
-
-	
 	private static IIPCManager ipcManager = null;
+	
+	private static String logFilePath = null;
+	
 	public static void setIPCManager(IIPCManager ipcManager)
 	{
 		Entry.ipcManager = ipcManager;
@@ -152,6 +162,57 @@ public class Entry {
 	public static IIPCManager getIPCManager()
 	{
 		return Entry.ipcManager;
+	}
+	public enum RunCommand {
+		Compare,
+		DetermineOption,
+		RunFlowDroid,
+		Invalid
+	}
+	
+	private static RunCommand runCommand = RunCommand.Invalid;
+	private static Map<String, InfoflowAndroidConfiguration> runOptions;
+	private static boolean reportAllFlows = false;
+	
+	public static boolean parseCommands(String[] args) {
+		String command = args[2];
+		if (command.equalsIgnoreCase("compare")) {
+			runCommand = RunCommand.Compare;
+			runOptions = setupRunOptions(args[3]);
+			int i = 4;
+			while (i < args.length) {
+				if (args[i].equalsIgnoreCase("--log")) {
+					logFilePath = args[i + 1];
+					i += 2;
+				} else if (args[i].equalsIgnoreCase("--reportallflows")) {
+					reportAllFlows = true;
+					i++;
+				}
+			}
+			return true;
+		} else if (command.equalsIgnoreCase("determineoption")) {
+			runCommand = RunCommand.DetermineOption;
+			int i = 3;
+			while (i < args.length) {
+				if (args[i].equalsIgnoreCase("--log")) {
+					logFilePath = args[i + 1];
+					i += 2;
+				}
+			}
+			return true;
+		} else if (command.equalsIgnoreCase("run")) {
+			runCommand = RunCommand.RunFlowDroid;
+			config = parseAdditionalOptions(args);
+			if (config == null) {
+				return false;
+			}
+			if (!validateAdditionalOptions(config)) {
+				return false;
+			};
+			return true;
+		}
+		
+		return false;
 	}
 	
 	/**
@@ -161,7 +222,10 @@ public class Entry {
 	 */
 	public static void main(final String[] args) throws IOException, InterruptedException {
 		if (args.length < 3) {
-			printUsage();	
+			printUsage();
+			return;
+		} else if (args[0] == "--help") {
+			printUsage();
 			return;
 		}
 		
@@ -177,95 +241,46 @@ public class Entry {
 			outputDir.delete();
 		}
 		
-		// Parse additional command-line arguments
+		final String fullFilePath = args[0];
+		final String platformsPath = args[1];
 		
-		/*
-		if (!parseAdditionalOptions(args))
+		// Parse additional command-line arguments
+		if (!parseCommands(args)) {
+			printUsage();
 			return;
-		if (!validateAdditionalOptions())
-			return;
-		if (repeatCount <= 0)
-			return;*/
+		}
 		
 		//Stores options to run
-		Map<String, InfoflowAndroidConfiguration> runOptions = setupRunOptions(args[2]);
 		
-		List<String> apkFiles = new ArrayList<String>();
-		File apkFile = new File(args[0]);
-		
-		for (String key : runOptions.keySet()) {
-			System.out.println(key);
-		}
-		
-		if (apkFile.isDirectory()) {
-			String[] dirFiles = apkFile.list(new FilenameFilter() {
-			
-				@Override
-				public boolean accept(File dir, String name) {
-					return (name.endsWith(".apk"));
-				}
-			
-			});
-			for (String s : dirFiles)
-				apkFiles.add(s);
-		} else {
-			//apk is a file so grab the extension
-			String extension = apkFile.getName().substring(apkFile.getName().lastIndexOf("."));
-			if (extension.equalsIgnoreCase(".txt")) {
-				BufferedReader rdr = new BufferedReader(new FileReader(apkFile));
-				String line = null;
-				while ((line = rdr.readLine()) != null)
-					apkFiles.add(line);
-				rdr.close();
-			}
-			else if (extension.equalsIgnoreCase(".apk"))
-				apkFiles.add(args[0]);
-			else {
-				System.err.println("Invalid input file format: " + extension);
-				return;
-			}
-		}
-		
-		int oldRepeatCount = repeatCount;
-		for (final String fileName : apkFiles) {
-			repeatCount = oldRepeatCount;
-			final String fullFilePath;
-			System.gc();
-			
-			// Directory handling
-			if (apkFiles.size() > 1) {
-				if (apkFile.isDirectory())
-					fullFilePath = args[0] + File.separator + fileName;
-				else
-					fullFilePath = fileName;
-				System.out.println("Analyzing file " + fullFilePath + "...");
-				File flagFile = new File("_Run_" + new File(fileName).getName());
-				if (flagFile.exists())
-					continue;
-				flagFile.createNewFile();
-			}
-			else
-				fullFilePath = fileName;
+		System.gc();
 
-			System.out.println("TIMEOUT: " + timeout + " sysTIMEOUT: " + sysTimeout);
-			// Run the analysis
+		// Run the analysis
+		switch (runCommand) {
+		case Compare:
+			runAnalysisComparison(fullFilePath, platformsPath, runOptions);
+			break;
+		case DetermineOption:
+			//determineOption(fullFilePath, platformsPath);
+			break;
+		case RunFlowDroid:
 			while (repeatCount > 0) {
 				System.gc();
 
 				if (timeout > 0)
-					runAnalysisTimeout(fullFilePath, args[1]);
+					runAnalysisTimeout(fullFilePath, platformsPath);
 				else if (sysTimeout > 0)
-					runAnalysisSysTimeout(fullFilePath, args[1]);
+					runAnalysisSysTimeout(fullFilePath, platformsPath);
 				else {
-					runAnalysisComparison(fullFilePath, args[1]);
+					runAnalysis(fullFilePath, platformsPath);
 					//runAnalysisComparison(fullFilePath, args[1], runOptions);
 				}
-				//Brackets to stop compiler complaints
 				repeatCount--;
 			}
-			
-			System.gc();
+			break;
+		default:
+			break;
 		}
+		
 	}
 
 	/**
@@ -742,6 +757,85 @@ public class Entry {
 		}
 	}
 
+	private static ApplicationProperties getApplicationProperties(final String fileName, final String androidJar, InfoflowAndroidConfiguration analysisConfig) {
+		try {
+			System.gc();
+
+			final SetupApplicationWithProperties app;
+			if (null == ipcManager)
+			{
+				app = new SetupApplicationWithProperties(androidJar, fileName);
+			}
+			else
+			{
+				app = new SetupApplicationWithProperties(androidJar, fileName, ipcManager);
+			}
+			
+			// Set configuration object
+			app.setConfig(analysisConfig);
+			
+			if (analysisConfig.isIccEnabled())
+			{
+				//Set instrumentation object
+				analysisConfig.setCodeEliminationMode(CodeEliminationMode.NoCodeElimination);
+				analysisConfig.setPathBuilder(PathBuilder.ContextSensitive);
+			}
+			
+			if (noTaintWrapper)
+				app.setSootConfig(new IInfoflowConfig() {
+					
+					@Override
+					public void setSootOptions(Options options) {
+						options.set_include_all(true);
+					}
+				});
+			
+			final ITaintPropagationWrapper taintWrapper;
+			if (noTaintWrapper)
+				taintWrapper = null;
+			else if (summaryPath != null && !summaryPath.isEmpty()) {
+				System.out.println("Using the StubDroid taint wrapper");
+				taintWrapper = createLibrarySummaryTW();
+				if (taintWrapper == null) {
+					System.err.println("Could not initialize StubDroid");
+					return null;
+				}
+			}
+			else {
+				final EasyTaintWrapper easyTaintWrapper;
+				File twSourceFile = new File("../soot-infoflow/EasyTaintWrapperSource.txt");
+				if (twSourceFile.exists())
+					easyTaintWrapper = new EasyTaintWrapper(twSourceFile);
+				else {
+					twSourceFile = new File("EasyTaintWrapperSource.txt");
+					if (twSourceFile.exists())
+						easyTaintWrapper = new EasyTaintWrapper(twSourceFile);
+					else {
+						System.err.println("Taint wrapper definition file not found at "
+								+ twSourceFile.getAbsolutePath());
+						return null;
+					}
+				}
+				easyTaintWrapper.setAggressiveMode(aggressiveTaintWrapper);
+				taintWrapper = easyTaintWrapper;
+			}
+			app.setTaintWrapper(taintWrapper);
+			ApplicationProperties appProps = app.runInfoflowProperties("SourcesAndSinks.txt");
+
+			app.addResultsAvailableHandler(new MyResultsAvailableHandler());
+			
+			return appProps;
+		} catch (IOException ex) {
+			System.err.println("Could not read file: " + ex.getMessage());
+			ex.printStackTrace();
+			throw new RuntimeException(ex);
+		} catch (XmlPullParserException ex) {
+			System.err.println("Could not read Android manifest file: " + ex.getMessage());
+			ex.printStackTrace();
+			throw new RuntimeException(ex);
+		}
+	}
+	
 	private static InfoflowResults runAnalysis(final String fileName, final String androidJar) {
 		try {
 			final long beforeRun = System.nanoTime();
@@ -907,7 +1001,7 @@ public class Entry {
 			app.setTaintWrapper(taintWrapper);
 			
 			System.out.println("Running data flow analysis...");
-			
+
 			app.addResultsAvailableHandler(new MyResultsAvailableHandler());
 			InfoflowResults res = app.runInfoflow("SourcesAndSinks.txt");
 			InfoflowResultsData resData = new InfoflowResultsData(res);
@@ -1046,10 +1140,13 @@ public class Entry {
 	}
 
 	private static void printUsage() {
-		System.out.println("FlowDroid (c) Secure Software Engineering Group @ EC SPRIDE");
+		System.out.println("FlowDroid Run Tool");
 		System.out.println();
-		System.out.println("Incorrect arguments: [0] = apk-file, [1] = android-jar-directory");
-		System.out.println("Optional further parameters:");
+		System.out.println("Argument usage:");
+		System.out.println("<apk_file> <platforms directory> compare <options_file> [--reportallflows --log <output_file>]");
+		System.out.println("<apk_file> <platforms directory> determineoption [--log <output_file>]");
+		System.out.println("<apk_file> <platforms directory> run [FlowDroid options]");
+		System.out.println("FlowDroid options for run:");
 		System.out.println("\t--TIMEOUT n Time out after n seconds (data flow only)");
 		System.out.println("\t--PATHTIMEOUT n Time out after n seconds (path reconstruction only)");
 		System.out.println("\t--CALLBACKTIMEOUT n Time out after n seconds (callback collection only)");
@@ -1091,58 +1188,104 @@ public class Entry {
 	}
 	
 	private static void runAnalysisComparison(String fileName, String androidJar, Map<String, InfoflowAndroidConfiguration> runOptions) {
-		try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName + ".comparison"))) {
-			//Runs analysis with no additional options enabled
-			InfoflowAndroidConfiguration baseConfig = new InfoflowAndroidConfiguration();
-			InfoflowResultsData analysisResultsBase = runAnalysis(fileName, androidJar, baseConfig);
-			bw.write("<base>\n");
-			bw.write("number of flows:" + analysisResultsBase.results.numConnections() + "\n");
-			bw.write("ram usage:" + analysisResultsBase.getMaxMemoryConsumption() + "\n");
-			bw.write("time:" + analysisResultsBase.getRunTime() + "\n");
-			
-			for (String optionName : runOptions.keySet()) {
-				InfoflowAndroidConfiguration optionConfig = runOptions.get(optionName);
-				InfoflowResultsData analysisResultsOption = runAnalysis(fileName, androidJar, optionConfig);
+		
+		String comparisonOutput = null;
+		try (StringWriter sw = new StringWriter()) {
+			if (runOptions.size() > 0) {
+				//Gets the first configuration to use as a base line in compaarison
+				Map.Entry<String, InfoflowAndroidConfiguration> entry = runOptions.entrySet().iterator().next();
+				InfoflowAndroidConfiguration baseConfig = entry.getValue();
+				InfoflowResultsData analysisResultsBase = runAnalysis(fileName, androidJar, baseConfig);
 				
-				ResultComparison resultComparison = compareResults(analysisResultsBase, analysisResultsOption);
+				sw.write("[" + entry.getKey() + "]\n");
 				
-				bw.write("<" + optionName + ">\n");
-				bw.write("number of flows:" + resultComparison.getComparisonFlows() + "\n");
-				bw.write("ram usage:" + analysisResultsOption.getMaxMemoryConsumption() + "\n");
-				bw.write("time:" + analysisResultsOption.getRunTime() + "\n");
-				bw.write("matched flows:" + resultComparison.getNumMatched() + "\n");
-				bw.write("missed flows:" + resultComparison.getNumMissed() + "\n");
-				bw.write("false positive flows:" + resultComparison.getNumFalsePositive() + "\n");
+				sw.write("number of flows:" + analysisResultsBase.results.numConnections() + "\n");
+				if (reportAllFlows) {
+					sw.write(analysisResultsBase.results.toString());
+				}
+				
+				//Remove the first option
+				runOptions.remove(entry.getKey());
+				
+				//Iterate through other options and run analysis
+				for (String optionName : runOptions.keySet()) {
+					InfoflowAndroidConfiguration optionConfig = runOptions.get(optionName);
+					InfoflowResultsData analysisResultsOption = runAnalysis(fileName, androidJar, optionConfig);
+					
+					ResultComparison resultComparison = compareResults(analysisResultsBase, analysisResultsOption);
+					
+					sw.write("[" + optionName + "]\n");
+					sw.write("number of flows:" + resultComparison.getComparisonFlows() + "\n");
+					sw.write("matched flows:" + resultComparison.getNumMatched() + "\n");
+					sw.write("missed flows:" + resultComparison.getNumMissed() + "\n");
+					sw.write("false positive flows:" + resultComparison.getNumFalsePositive() + "\n");
+					if (reportAllFlows) {
+						sw.write(resultComparison.printComparisonFull());
+					}
+				}
+				
+				sw.close();
+				System.out.println(sw.toString());
+				comparisonOutput = sw.toString();
 			}
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.err.println("Error when printing comparison results: " + e);
+		}
+		
+		if (comparisonOutput != null && logFilePath != null) {
+			try (BufferedWriter bw = new BufferedWriter(new FileWriter(logFilePath))) {
+				bw.write(comparisonOutput);
+				bw.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+				System.err.println("Error when logging comparison results: " + e);
+			}
+		}
+	}
+	
+	private static void runAnalysisGetProperties(String fileName, String androidJar, String optionName, InfoflowAndroidConfiguration option) {
+		try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName + "_" + optionName + ".properties"))) {
+			//Runs analysis with no additional options enabled
+			ApplicationProperties appProperties = getApplicationProperties(fileName, androidJar, option);
 			
+			bw.write(optionName + "\n");
+			
+			bw.write("callgraphedges:" + appProperties.getCallGraphEdges() + "\n");
+			bw.write("sinks:" + appProperties.getNumSinks() + "\n");
+			bw.write("sources:" + appProperties.getNumSources() + "\n");
+			bw.write("entrypoints:" + appProperties.getNumEntrypoints() + "\n");
+			bw.write("reachablemethods:" + appProperties.getNumReachableMethods() + "\n");
+			bw.write("numclasses:" + appProperties.getNumClasses() + "\n");
+			bw.write("providers:" + appProperties.getProviders() + "\n");
+			bw.write("services:" + appProperties.getServices() + "\n");
+			bw.write("activities:" + appProperties.getActivities() + "\n");
+			bw.write("receivers:" + appProperties.getActivities() + "\n");
+			bw.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName + "_" + optionName + ".propertiescomplete"))) {
+			//Runs analysis with no additional options enabled
+			InfoflowResultsData analysisResults = runAnalysis(fileName, androidJar, option);
+			
+			bw.write(optionName + "\n");
+			bw.write("numberflows:" + analysisResults.results.numConnections() + "\n");
+			bw.write("ram usage:" + analysisResults.getMaxMemoryConsumption() + "\n");
+			bw.write("time:" + analysisResults.getRunTime() + "\n");
 			bw.close();
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
 	
-	private static void runAnalysisComparison(String fileName, String androidJar) {
-		InfoflowAndroidConfiguration defaultConfig = new InfoflowAndroidConfiguration();
-		InfoflowResultsData analysisResultsBase = runAnalysis(fileName, androidJar, defaultConfig);
-		
-		InfoflowAndroidConfiguration implicitConfig = new InfoflowAndroidConfiguration();
-		implicitConfig.setEnableImplicitFlows(false);
-		InfoflowResultsData analysisResultsImplicit = runAnalysis(fileName, androidJar, implicitConfig);
-		
-		ResultComparison appResultComparison = compareResults(analysisResultsBase, analysisResultsImplicit);
-		
-		System.out.println("number of flows:" + appResultComparison.getComparisonFlows());
-		System.out.println("matched flows:" + appResultComparison.getNumMatched());
-		System.out.println("missed flows:" + appResultComparison.getNumMissed());
-		System.out.println("false positive flows:" + appResultComparison.getNumFalsePositive());
-	}
-	
 	private static ResultComparison compareResults(InfoflowResultsData baseResultsData, InfoflowResultsData optionsResultsData) {
 		InfoflowResults baseResults = baseResultsData.results;
 		InfoflowResults optionsResults = optionsResultsData.results;
 		
-		MultiMap<ResultSinkInfo, ResultSourceInfo> baseResultsMap = baseResults.getResults();
-		MultiMap<ResultSinkInfo, ResultSourceInfo> optionsResultsMap = optionsResults.getResults();
+		MultiMap<ResultSinkInfo, ResultSourceInfo> baseResultsMap = removeDuplicates(baseResults.getResults());
+		MultiMap<ResultSinkInfo, ResultSourceInfo> optionsResultsMap = removeDuplicates(optionsResults.getResults());
 		
 		//Map containing ...
 		MultiMap<ResultSinkInfo, ResultSourceInfo> missedFlowMap = new HashMultiMap<ResultSinkInfo, ResultSourceInfo>();
@@ -1154,9 +1297,7 @@ public class Entry {
 		ArrayList<ResultSinkInfo> matchedSinksBase = new ArrayList<ResultSinkInfo>(); 
 		ArrayList<ResultSinkInfo> matchedSinksOptions = new ArrayList<ResultSinkInfo>(); 
 		
-		int baseResultsNumFlows = baseResults.numConnections();
-		int optionsResultsNumFlows = optionsResults.numConnections();
-		ResultComparison resultDiff = new ResultComparison(baseResultsNumFlows, optionsResultsNumFlows);
+		ResultComparison resultDiff = new ResultComparison(baseResults.numConnections(), optionsResults.numConnections());
 		
 		//Adds all the base sinks to a list to determine missed sinks
 		for (ResultSinkInfo baseSink : baseResultsMap.keySet()) {
@@ -1168,16 +1309,10 @@ public class Entry {
 			falsePositiveSinks.add(optionsSink);
 		}
 		
-		ResultSinkInfo[] baseSinkArray = baseResultsMap.keySet().toArray(new ResultSinkInfo[baseResultsMap.keySet().size()]);
-		for (int i = 0; i < baseSinkArray.length; i++) {
-			if (baseSinkArray[i].getSink().toString().equals("staticinvoke <android.util.Log: int e(java.lang.String,java.lang.String)>(\"PlantNet\", $r8)")) {
-				System.out.println("I: " + i);
-			}
-		}
 		
 		for (ResultSinkInfo baseSink : baseResultsMap.keySet()) {
 			for (ResultSinkInfo optionsSink : optionsResultsMap.keySet()) {
-				if (baseSink.getSink().toString().equals(optionsSink.getSink().toString())) {
+				if (baseSink.toString().equals(optionsSink.toString())) {
 					//Uses separate lists because sink objects themselves cannot be compared directly
 					matchedSinksBase.add(baseSink);
 					matchedSinksOptions.add(optionsSink);
@@ -1226,12 +1361,15 @@ public class Entry {
 			
 			for (ResultSourceInfo baseSourceForSink : baseResultsMap.get(currBaseSink)) {
 				for (ResultSourceInfo optionsSourceForSink : optionsResultsMap.get(currOptionsSink)) {
-					if (baseSourceForSink.getSource().toString().equals(optionsSourceForSink.getSource().toString())) {
-						//Adds the base sink / source pair as a flow
-						matchedFlowMap.put(currBaseSink, baseSourceForSink);
-						
-						currSinkMissedSources.remove(baseSourceForSink);
-						currSinkFalsePositiveSources.remove(optionsSourceForSink);
+					if (currSinkFalsePositiveSources.contains(optionsSourceForSink)) {
+						if (baseSourceForSink.toString().equals(optionsSourceForSink.toString())) {
+							//Adds the base sink / source pair as a flow
+							matchedFlowMap.put(currBaseSink, baseSourceForSink);
+							
+							currSinkMissedSources.remove(baseSourceForSink);
+							currSinkFalsePositiveSources.remove(optionsSourceForSink);
+							break;
+						}
 					}
 				}
 			}
@@ -1249,11 +1387,11 @@ public class Entry {
 		return resultDiff;
 	}
 	
-	//
-	private static Map<String, InfoflowAndroidConfiguration> setupRunOptions(String optionsList) throws IOException {
+	private static Map<String, InfoflowAndroidConfiguration> setupRunOptions(String optionsList) {
 		Map<String, InfoflowAndroidConfiguration> options = new LinkedHashMap<String, InfoflowAndroidConfiguration>();
-		BufferedReader br = new BufferedReader(new FileReader(optionsList));		
+		
 		try {
+			BufferedReader br = new BufferedReader(new FileReader(optionsList));		
 			String tagLine = br.readLine();
 			String optionsLine = br.readLine();
 			while (tagLine != null && optionsLine != null) {
@@ -1267,12 +1405,96 @@ public class Entry {
 				tagLine = br.readLine();
 				optionsLine = br.readLine();
 			}
+			br.close();
 		} catch(Exception e) {
 			System.err.println("Error in options reading: " + e);
-		} finally {
-			br.close();
 		}
 		
 		return options;
 	}
+	
+	//Algorithm to remove duplicate sinks from analysis results
+	private static MultiMap<ResultSinkInfo, ResultSourceInfo> removeDuplicates(MultiMap<ResultSinkInfo, ResultSourceInfo> results) {
+		MultiMap<ResultSinkInfo, ResultSourceInfo> resultsMap = new HashMultiMap<ResultSinkInfo, ResultSourceInfo>();
+		
+		ResultSinkInfo[] resultSinks = results.keySet().toArray(new ResultSinkInfo[results.keySet().size()]);
+		
+		for (int i = 0; i < resultSinks.length; i++) {
+			//Creates a new set to store sources
+			if (resultSinks[i] != null) {
+				Set<ResultSourceInfo> resultSinkSources = new HashSet<ResultSourceInfo>(); 
+				resultSinkSources.addAll(results.get(resultSinks[i]));
+				
+				for (int j = i + 1; j < resultSinks.length; j++) {
+					if (resultSinks[j] != null) {
+						//Cannot compare ResultSourceInfo objects directly, due to some objects containing
+						//the same value, but evaluate as different objects in .equals() comparison.
+						if (resultSinks[i].toString().equals(resultSinks[j].toString())) {
+							//If a duplicate sink is found, add their list of sources to the current list of sources
+
+							resultSinkSources.addAll(results.get(resultSinks[j]));
+							resultSinks[j] = null;
+						}
+					}
+				}
+				
+				resultsMap.putAll(resultSinks[i], resultSinkSources);
+			}
+		}
+		
+		return resultsMap;
+	}
+	
+	private static boolean predictFinish(ApplicationProperties properties) {
+		String SVM_MODEL_FILE = "flowdroidmodel.txt";
+		try {
+			svm_model model = svm.svm_load_model(SVM_MODEL_FILE);
+			
+			int numTokens = 2;
+			svm_node[] x = new svm_node[numTokens];
+			for (int i = 0; i < numTokens; i++) {
+				x[i] = new svm_node();
+				x[i].index = i;
+			}
+			x[0].value = properties.getCallGraphEdges();
+			x[1].value = 0;
+			
+			double v = svm.svm_predict(model, x);
+			return v == 1 ? true : false;
+		} catch (Exception e) {
+			System.out.println("Error: " + e);
+		}
+		return false;
+	}
+	
+	private static void testPredict() {
+		System.out.println("Predict start.");
+		String SVM_MODEL_FILE = "flowdroidmodel.txt";
+		try {
+			svm_model model = svm.svm_load_model(SVM_MODEL_FILE);
+			int numTest = 0;
+			for (double testVal = 1; testVal < 2000000; testVal+= 1) {
+				if (testVal % 100000 == 0) {
+					System.out.println("PROGRESS: " + testVal);
+				}
+				int numTokens = 2;
+				svm_node[] x = new svm_node[numTokens];
+				for (int i = 0; i < numTokens; i++) {
+					x[i] = new svm_node();
+					x[i].index = i;
+				}
+				x[0].value = testVal;
+				x[1].value = 0;
+				double v = svm.svm_predict(model, x);
+				if (v == 1) {
+					System.out.println(testVal);
+				}
+			}
+			
+		} catch (Exception e) {
+			System.out.println("Error: " + e);
+		}
+
+	}
+	
 }

@@ -1,17 +1,20 @@
 #Fill the following paths to compile with jars:
 
 #Location of soot.jar
-soot.jar=../soot/soot-trunk.jar
+soot.jar=
 
 #Location of FlowDroid infoflow jar
-infoflow.jar=../soot-infoflow/soot-infoflow.jar
-infoflow-summaries.jar=../soot-infoflow/soot-infoflow-summaries.jar
+infoflow.jar=
+infoflow-summaries.jar=
 
 #Location of FlowDroid infoflow Android jar
-infoflow-android.jar=../soot-infoflow-android/soot-infoflow-android.jar
-infoflow-android-javadoc.jar=../soot-infoflow-android/soot-infoflow-android-javadoc.jar
+infoflow-android.jar=
+infoflow-android-javadoc.jar=
 
-# T arget JAR file
+#Location of Libsvm library
+libsvm.jar=
+
+# Target JAR file
 flowdroid-run-tool.jar=./flowdroid-run-tool.jar
 
 # Path to DroidBench
