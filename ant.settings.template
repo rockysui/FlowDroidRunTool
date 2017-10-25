@@ -5,16 +5,11 @@ soot.jar=
 
 #Location of FlowDroid infoflow jar
 infoflow.jar=
-infoflow-summaries.jar=
 
 #Location of FlowDroid infoflow Android jar
 infoflow-android.jar=
-infoflow-android-javadoc.jar=
 
-#Location of Libsvm library
-libsvm.jar=
-
-# Target JAR file
+# T arget JAR file
 flowdroid-run-tool.jar=./flowdroid-run-tool.jar
 
 # Path to DroidBench

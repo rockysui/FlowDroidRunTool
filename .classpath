@@ -6,9 +6,9 @@
 	<classpathentry combineaccessrules="false" kind="src" path="/soot"/>
 	<classpathentry combineaccessrules="false" kind="src" path="/soot-infoflow"/>
 	<classpathentry kind="lib" path="/soot/libs/AXMLPrinter2.jar"/>
+	<classpathentry kind="lib" path="D:/Documents/comp4930/FlowDroidSource/flowdroid-run-tool/libsvm.jar"/>
 	<classpathentry kind="lib" path="D:/Documents/comp4930/FlowDroidSource/soot-infoflow.jar"/>
 	<classpathentry kind="lib" path="D:/Documents/comp4930/FlowDroidSource/soot-infoflow-android.jar"/>
 	<classpathentry kind="lib" path="D:/Documents/comp4930/FlowDroidSource/soot-trunk.jar"/>
-	<classpathentry kind="lib" path="D:/Documents/comp4930/FlowDroidSource/flowdroid-run-tool/libsvm.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>

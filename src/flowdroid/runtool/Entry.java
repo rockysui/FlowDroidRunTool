@@ -167,10 +167,12 @@ public class Entry {
 		Compare,
 		DetermineOption,
 		RunFlowDroid,
+		GetProperties,
 		Invalid
 	}
 	
 	private static RunCommand runCommand = RunCommand.Invalid;
+	private static String configName = "";
 	private static Map<String, InfoflowAndroidConfiguration> runOptions;
 	private static boolean reportAllFlows = false;
 	
@@ -178,18 +180,20 @@ public class Entry {
 		String command = args[2];
 		if (command.equalsIgnoreCase("compare")) {
 			runCommand = RunCommand.Compare;
-			runOptions = setupRunOptions(args[3]);
-			int i = 4;
-			while (i < args.length) {
-				if (args[i].equalsIgnoreCase("--log")) {
-					logFilePath = args[i + 1];
-					i += 2;
-				} else if (args[i].equalsIgnoreCase("--reportallflows")) {
-					reportAllFlows = true;
-					i++;
+			if (args.length > 3) {
+				runOptions = setupRunOptions(args[3]);
+				int i = 4;
+				while (i < args.length) {
+					if (args[i].equalsIgnoreCase("--log")) {
+						logFilePath = args[i + 1];
+						i += 2;
+					} else if (args[i].equalsIgnoreCase("--reportallflows")) {
+						reportAllFlows = true;
+						i++;
+					}
 				}
+				return true;
 			}
-			return true;
 		} else if (command.equalsIgnoreCase("determineoption")) {
 			runCommand = RunCommand.DetermineOption;
 			int i = 3;
@@ -200,6 +204,19 @@ public class Entry {
 				}
 			}
 			return true;
+		} else if (command.equalsIgnoreCase("getproperties")) {
+			runCommand = RunCommand.GetProperties;
+			if (args.length > 3) {
+				configName = args[3];
+				config = parseAdditionalOptions(args);
+				if (config == null) {
+					return false;
+				}
+				if (!validateAdditionalOptions(config)) {
+					return false;
+				};
+				return true;
+			}
 		} else if (command.equalsIgnoreCase("run")) {
 			runCommand = RunCommand.RunFlowDroid;
 			config = parseAdditionalOptions(args);
@@ -260,7 +277,7 @@ public class Entry {
 			runAnalysisComparison(fullFilePath, platformsPath, runOptions);
 			break;
 		case DetermineOption:
-			//determineOption(fullFilePath, platformsPath);
+			determineOption(fullFilePath, platformsPath);
 			break;
 		case RunFlowDroid:
 			while (repeatCount > 0) {
@@ -277,6 +294,8 @@ public class Entry {
 				repeatCount--;
 			}
 			break;
+		case GetProperties:
+			runAnalysisGetProperties(fullFilePath, platformsPath, configName, config);
 		default:
 			break;
 		}
@@ -907,7 +926,11 @@ public class Entry {
 			app.addResultsAvailableHandler(new MyResultsAvailableHandler());
 			final InfoflowResults res = app.runInfoflow("SourcesAndSinks.txt");
 			System.out.println("Analysis has run for " + (System.nanoTime() - beforeRun) / 1E9 + " seconds");
-			
+			for (ResultSinkInfo sink : res.getResults().keySet()) {
+				for (ResultSourceInfo source: res.getResults().get(sink)) {
+					System.out.println(source + " TO " + sink);
+				}
+			}
 			if (config.getLogSourcesAndSinks()) {
 				if (!app.getCollectedSources().isEmpty()) {
 					System.out.println("Collected sources:");
@@ -1224,9 +1247,10 @@ public class Entry {
 					}
 				}
 				
-				sw.close();
 				System.out.println(sw.toString());
 				comparisonOutput = sw.toString();
+				
+				sw.close();
 			}
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -1242,6 +1266,86 @@ public class Entry {
 				System.err.println("Error when logging comparison results: " + e);
 			}
 		}
+	}
+	
+	private static void determineOption(String fileName, String androidJar) {
+		String comparisonOutput = null;
+		try (StringWriter sw = new StringWriter()) {
+			Map<Integer ,InfoflowAndroidConfigurationArgument> configurations = getConfigurationList();
+			//long allocatedMemory = Runtime.getRuntime().maxMemory();
+			
+			for (int currConfigNum : configurations.keySet()) {
+				InfoflowAndroidConfiguration currConfig = configurations.get(currConfigNum).config;
+				ApplicationProperties appProperties = getApplicationProperties(fileName, androidJar, currConfig);
+				int predictedSettingApp = predictSetting(appProperties);
+				//int predictedMemoryProfile = predictSettingMemory(appProperties);
+				
+				if (currConfigNum >= predictedSettingApp) {
+					sw.write("Predicted FlowDroid argument to use:\n");
+					
+					if (configurations.get(currConfigNum).arguments == "") {
+						sw.write("[no additional arguments]");
+					} else {
+						sw.write(configurations.get(currConfigNum).arguments);
+					}
+					
+					break;
+				}
+			}
+			
+			System.out.println(sw.toString());
+			comparisonOutput = sw.toString();
+			sw.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.err.println("Error when printing prediction results: " + e);
+		}
+		
+		if (comparisonOutput != null && logFilePath != null) {
+			try (BufferedWriter bw = new BufferedWriter(new FileWriter(logFilePath))) {
+				bw.write(comparisonOutput);
+				bw.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+				System.err.println("Error when logging comparison results: " + e);
+			}
+		}
+		
+	}
+	
+	private static int currentMemoryProfile(long freeMemory) {
+		if (freeMemory < 4294967296L) {
+			return 0;
+		} else if (freeMemory < 8589934592L) {
+			return 1;
+		} else if (freeMemory < 17179869184L) {
+			return 2;
+		} else if (freeMemory < 34359738368L) {
+			return 3;
+		} else if (freeMemory < 68719476736L) {
+			return 4;
+		}
+		return 5;
+	}
+	
+	private static Map<Integer , InfoflowAndroidConfigurationArgument> getConfigurationList() {
+		Map<Integer ,InfoflowAndroidConfigurationArgument> configurations = new HashMap<Integer, InfoflowAndroidConfigurationArgument>();
+		ArrayList<String> configArguments = new ArrayList<String>();
+		//6 configurations in total
+		configArguments.add("");
+		configArguments.add("--nocallbacks");
+		configArguments.add("--nocallbacks --nostatic --aplength 4");
+		configArguments.add("--nocallbacks --nostatic --aliasflowins --noexceptions --aplength 3");
+		configArguments.add("--nocallbacks --nostatic --aliasflowins --noexceptions --nopaths --noarraysize --aplength 2");
+		configArguments.add("--nocallbacks --nostatic --aliasflowins --noexceptions --notypechecking --callbackanalyzer fast --nopaths --noarraysize --aplength 1");
+		
+		int configIndex = 1;
+		for (String currConfig : configArguments) {
+			configurations.put(configIndex, (new InfoflowAndroidConfigurationArgument(currConfig, parseAdditionalOptions(currConfig.split(" ")))));
+			configIndex ++;
+		}
+		
+		return configurations;
 	}
 	
 	private static void runAnalysisGetProperties(String fileName, String androidJar, String optionName, InfoflowAndroidConfiguration option) {
@@ -1445,56 +1549,66 @@ public class Entry {
 		return resultsMap;
 	}
 	
-	private static boolean predictFinish(ApplicationProperties properties) {
-		String SVM_MODEL_FILE = "flowdroidmodel.txt";
+	private static int predictSetting(ApplicationProperties properties) {
+		String SVM_MODEL_FILE = "flowdroid_model_app.txt";
 		try {
 			svm_model model = svm.svm_load_model(SVM_MODEL_FILE);
 			
-			int numTokens = 2;
+			int numTokens = 10;
 			svm_node[] x = new svm_node[numTokens];
 			for (int i = 0; i < numTokens; i++) {
 				x[i] = new svm_node();
 				x[i].index = i;
 			}
-			x[0].value = properties.getCallGraphEdges();
-			x[1].value = 0;
 			
+			x[0].value = properties.getCallGraphEdges();
+			x[1].value = properties.getNumSources();
+			x[2].value = properties.getNumSinks();
+			x[3].value = properties.getNumEntrypoints();
+			x[4].value = properties.getNumReachableMethods();
+			x[5].value = properties.getNumClasses();
+			x[6].value = properties.getProviders();
+			x[7].value = properties.getServices();
+			x[8].value = properties.getActivities();
+			x[9].value = properties.getReceivers();
+
 			double v = svm.svm_predict(model, x);
-			return v == 1 ? true : false;
+			return (int) v;
 		} catch (Exception e) {
 			System.out.println("Error: " + e);
 		}
-		return false;
+		return -1;
 	}
 	
-	private static void testPredict() {
-		System.out.println("Predict start.");
-		String SVM_MODEL_FILE = "flowdroidmodel.txt";
+	private static int predictSettingMemory(ApplicationProperties properties) {
+		String SVM_MODEL_FILE = "flowdroid_model_memory.txt";
 		try {
 			svm_model model = svm.svm_load_model(SVM_MODEL_FILE);
-			int numTest = 0;
-			for (double testVal = 1; testVal < 2000000; testVal+= 1) {
-				if (testVal % 100000 == 0) {
-					System.out.println("PROGRESS: " + testVal);
-				}
-				int numTokens = 2;
-				svm_node[] x = new svm_node[numTokens];
-				for (int i = 0; i < numTokens; i++) {
-					x[i] = new svm_node();
-					x[i].index = i;
-				}
-				x[0].value = testVal;
-				x[1].value = 0;
-				double v = svm.svm_predict(model, x);
-				if (v == 1) {
-					System.out.println(testVal);
-				}
+			
+			int numTokens = 10;
+			svm_node[] x = new svm_node[numTokens];
+			for (int i = 0; i < numTokens; i++) {
+				x[i] = new svm_node();
+				x[i].index = i;
 			}
 			
+			x[0].value = properties.getCallGraphEdges();
+			x[1].value = properties.getNumSources();
+			x[2].value = properties.getNumSinks();
+			x[3].value = properties.getNumEntrypoints();
+			x[4].value = properties.getNumReachableMethods();
+			x[5].value = properties.getNumClasses();
+			x[6].value = properties.getProviders();
+			x[7].value = properties.getServices();
+			x[8].value = properties.getActivities();
+			x[9].value = properties.getReceivers();
+
+			double v = svm.svm_predict(model, x);
+			return (int) v;
 		} catch (Exception e) {
 			System.out.println("Error: " + e);
 		}
-
+		return -1;
 	}
 	
 }
